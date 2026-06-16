@@ -1,0 +1,364 @@
+#include <LiquidCrystal.h>
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+                          
+
+const int rs = 13, en = 12, d4 =14 , d5 = 27, d6 = 26, d7 = 25;
+LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
+
+// -------------------- PIN DEFINITION --------------------
+const int FLOW_WATER_PIN = 18;   // Water flow sensor pulse pin
+const int FLOW_GAS_PIN   = 5;  // Gas flow sensor pulse pin
+
+const int MQ_PIN         = 34;  // MQ gas sensor (analog)
+const int LDR_PIN        = 35;  // LDR crack detector (analog)
+const int CURRENT_PIN    = 32;  // ACS712 current sensor (analog)
+
+
+
+
+int phsensor=36;
+
+unsigned long int avgValue;  //Store the average value of the sensor feedback
+float b;
+int buf[10],temp;
+
+float pHValue = 0;
+unsigned long lastPhDisplay = 0;
+bool showPh = false;
+
+
+const int BUZZER_PIN     = 2;   // Buzzer output
+const int Switch      = 15;  // Relay output
+
+
+int R1=17;  //Water
+int G1=16;
+
+int R2=23;  //Gas
+int G2=19;
+
+int R3=21;  //Electricity
+int G3=22;
+
+int R4=4;  // Optical
+int G4=33;
+
+
+// -------------------- FLOW SENSOR CALIBRATION --------------------
+volatile unsigned long waterPulseCount = 0;
+volatile unsigned long gasPulseCount = 0;
+
+const float CALIB_FLOW_WATER = 7.5; 
+const float CALIB_FLOW_GAS   = 7.5;
+
+const unsigned long FLOW_SAMPLE_MS = 1000; // 1 sec sample interval
+
+unsigned long lastFlowSampleMillis = 0;
+unsigned long lastLCDMillis = 0;
+
+// -------------------- ADC THRESHOLDS --------------------
+const float MQ_THRESHOLD = 3000.0;  // Gas leak threshold (tune)
+const int LDR_THRESHOLD  = 1200;    // Light loss → crack
+//const float CURRENT_THRESHOLD_A = 1.0; // Electric fault threshold (tune)
+
+// -------------------- ADC SETTINGS --------------------
+const float ADC_REF_VOLT = 3.3;
+const int ADC_MAX = 4095;
+const float ACS712_SENSITIVITY = 0.185; // V per A (for ACS712-5A)
+const float ACS712_ZERO = 1.65;         // mid voltage for ACS712
+
+// -------------------- FLOW VALUES --------------------
+float waterLpm = 0.0;
+float gasLpm   = 0.0;
+
+
+  // DETECTION LOGIC
+  float waterFault;
+  float gasFlowFault ;
+  float gasLeak ;
+  float opticalFault;
+  float elecFault;
+
+  float anyFault ;
+
+
+
+
+// -------------------- INTERRUPTS --------------------
+void IRAM_ATTR waterISR() {
+  waterPulseCount++;
+}
+
+void IRAM_ATTR gasISR() {
+  gasPulseCount++;
+}
+
+// -------------------- SETUP --------------------
+void setup() 
+{
+  Serial.begin(9600);
+
+  pinMode(FLOW_WATER_PIN, INPUT_PULLUP);
+  pinMode(FLOW_GAS_PIN, INPUT_PULLUP);
+
+    pinMode(R1, OUTPUT);
+  pinMode(G1, OUTPUT);
+  
+    pinMode(R2, OUTPUT);
+  pinMode(G2, OUTPUT);
+  
+    pinMode(R3, OUTPUT);
+  pinMode(G3, OUTPUT);
+  
+    pinMode(R4, OUTPUT);
+  pinMode(G4, OUTPUT);
+
+  pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(Switch, INPUT_PULLUP);
+  digitalWrite(BUZZER_PIN, LOW);
+ 
+
+    digitalWrite(R1, LOW);
+  digitalWrite(G1, HIGH);
+  
+    digitalWrite(R2, LOW);
+  digitalWrite(G2, HIGH);
+  
+    digitalWrite(R3, LOW);
+  digitalWrite(G3, HIGH);
+  
+    digitalWrite(R4, LOW);
+  digitalWrite(G4, HIGH);
+  
+
+  attachInterrupt(digitalPinToInterrupt(FLOW_WATER_PIN), waterISR, RISING);
+  attachInterrupt(digitalPinToInterrupt(FLOW_GAS_PIN), gasISR, RISING);
+
+  lcd.begin(16,2);
+  lcd.print("Multi-Pipe Sys");
+  lcd.setCursor(0,1);
+  lcd.print("Initializing...");
+  delay(1500);
+  lcd.clear();
+}
+
+// -------------------- SENSOR FUNCTIONS --------------------
+float getCurrentA() 
+{
+  int adc = analogRead(CURRENT_PIN);
+  float voltage = (adc * ADC_REF_VOLT) / ADC_MAX;
+  float diff = voltage - ACS712_ZERO;
+  return fabs(diff / ACS712_SENSITIVITY);
+}
+
+// -------------------- FLOW CONVERSION --------------------
+float pulsesToLpm(unsigned long pulses, float calib) 
+{
+  float pps = pulses / 1.0;  // pulses per second
+  return pps / calib;
+}
+
+//// -------------------- LCD DISPLAY --------------------
+//void displayStatus(bool waterFault, bool gasFault,
+//                   bool opticalFault, bool elecFault) {
+
+void LCD_Display()
+{
+  lcd.clear();
+
+  // LINE 1: Water & Gas Flow
+  lcd.setCursor(0,0);
+
+  if (waterFault)
+  {
+    lcd.print("W:Fault ");
+    digitalWrite(BUZZER_PIN, HIGH);
+        digitalWrite(R1,HIGH);
+  digitalWrite(G1, LOW);
+  }
+  else 
+  {
+    lcd.print("W:");
+    lcd.print(waterLpm, 1);
+    lcd.print(" ");
+    digitalWrite(BUZZER_PIN, LOW);
+        digitalWrite(R1, LOW);
+  digitalWrite(G1, HIGH);
+  }
+
+  lcd.setCursor(9,0);
+  if (gasFlowFault)
+  {
+    lcd.print("G:Fault");
+    digitalWrite(BUZZER_PIN, HIGH);
+        digitalWrite(R2, HIGH);
+  digitalWrite(G2, LOW);
+  }
+  else 
+  {
+    lcd.print("G:");
+    lcd.print(gasLpm, 1);
+       digitalWrite(BUZZER_PIN, LOW);
+        digitalWrite(R2, LOW);
+  digitalWrite(G2, HIGH);
+  }
+
+  // LINE 2:Optical / Electrical fault
+  lcd.setCursor(0,1);
+
+ if (elecFault) 
+ {
+  lcd.print("E:Fault");
+  digitalWrite(BUZZER_PIN, HIGH);
+  digitalWrite(R3, HIGH);
+  digitalWrite(G3, LOW);
+ }
+  else
+  {
+   lcd.print("E:OK ");
+      digitalWrite(BUZZER_PIN, LOW);
+  digitalWrite(R3, LOW);
+  digitalWrite(G3, HIGH);
+  }
+   lcd.setCursor(9,1);
+  if (opticalFault) 
+  {
+  lcd.print("O:Fault ");
+  digitalWrite(BUZZER_PIN, HIGH);
+      digitalWrite(R4, HIGH);
+  digitalWrite(G4, LOW);
+  }
+  else
+  {
+    lcd.print("O:OK ");
+       digitalWrite(BUZZER_PIN, LOW);
+        digitalWrite(R4, LOW);
+  digitalWrite(G4, HIGH);
+  }
+  delay(1000);
+   lcd.clear();
+    lcd.print("pH: ");
+    lcd.print(pHValue,1);
+    delay(1000);
+
+ 
+}
+
+// -------------------- MAIN LOOP --------------------
+void loop() 
+{
+  unsigned long now = millis();
+
+  // FLOW SENSOR SAMPLE EVERY 1 SEC
+  if (now - lastFlowSampleMillis >= FLOW_SAMPLE_MS) 
+  {
+    noInterrupts();
+    unsigned long w = waterPulseCount;
+    unsigned long g = gasPulseCount;
+    waterPulseCount = 0;
+    gasPulseCount = 0;
+    interrupts();
+
+    waterLpm = pulsesToLpm(w, CALIB_FLOW_WATER);
+    gasLpm   = pulsesToLpm(g, CALIB_FLOW_GAS);
+
+    lastFlowSampleMillis = now;
+
+    Serial.print("Water LPM: "); Serial.println(waterLpm);
+    Serial.print("Gas LPM: "); Serial.println(gasLpm);
+  }
+
+  // READ SENSORS
+  float mqRaw = analogRead(MQ_PIN);
+  int ldrRaw = analogRead(LDR_PIN);
+  float curA = getCurrentA();
+
+ int p=analogRead(36);
+  p=4095-p;
+  pHValue = map(p, 0, 4095, 0, 14);
+   Serial.print("pHValue:");  
+  Serial.print(pHValue);
+  Serial.println("");
+//   // show pH for 1 second every loop
+//  showPh = true;
+//  lastPhDisplay = now;
+
+ 
+  
+  Serial.println("Gas:"+String(mqRaw));
+  Serial.println("LDR:"+String(ldrRaw));
+  Serial.println("Current:"+String(curA));
+  
+  delay(1000);
+
+  if(digitalRead(Switch)==LOW)
+  {
+    
+     lcd.clear();
+    lcd.print("Electricity ");
+    lcd.setCursor(0,1);
+    lcd.print("Fault Occured..");
+    Serial.println("Electricity Fault Detected");
+    elecFault=1;
+    delay(1000);
+  }
+  else
+  {
+     elecFault=0;
+  }
+  if(mqRaw > MQ_THRESHOLD)
+  {
+    lcd.clear();
+    lcd.print("Gas Leakage ");
+    lcd.setCursor(0,1);
+    lcd.print("Detected..");
+    Serial.println("Gas Leakage Detected");
+    delay(1000);
+  }
+  // DETECTION LOGIC
+  waterFault = (waterLpm < 0.2);
+  gasFlowFault = (gasLpm < 0.2);
+  //gasLeak = (mqRaw > MQ_THRESHOLD);
+  opticalFault = (ldrRaw < LDR_THRESHOLD);
+//  elecFault = (curA > CURRENT_THRESHOLD_A);
+elecFault=(elecFault==1);
+
+  anyFault = waterFault || gasFlowFault || gasLeak || opticalFault || elecFault;
+
+  // ALARM HANDLING
+  if (anyFault) 
+  {
+    digitalWrite(BUZZER_PIN, HIGH);
+  delay(500);
+  } 
+  else 
+  {
+    digitalWrite(BUZZER_PIN, LOW);
+ 
+  }
+
+  LCD_Display();
+//
+//  // LCD UPDATE
+//  if (showPh) 
+//  {
+//    lcd.clear();
+//    lcd.print("pH: ");
+//    lcd.print(pHValue,1);
+//
+//    if (now - lastPhDisplay >= 1000) {
+//      showPh = false;  // go back to main screen
+//    }
+//  }
+//  else if (now - lastLCDMillis >= 500) 
+//  {
+//    displayStatus(waterFault, gasFlowFault, opticalFault, elecFault);
+//    
+//    lastLCDMillis = now;
+//  }
+
+
+}

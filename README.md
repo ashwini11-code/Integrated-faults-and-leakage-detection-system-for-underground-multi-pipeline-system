@@ -1,10 +1,10 @@
-# 🛠️ ESP32 Multi-Utility Pipe Monitoring System
+#  ESP32 Multi-Utility Pipe Monitoring System
 
 An IoT-based multi-utility pipeline monitoring and fault detection system powered by an **ESP32 microcontroller**. This system continuously tracks parameters across **Water, Gas, Electrical, and Optical** utilities, alerting users to leakages, line drops, structural cracks, and fault conditions in real time via an LCD display and auditory alarms.
 
 ---
 
-## 📌 System Features
+##  System Features
 
 * 💧 **Water Flow & Quality Monitoring:** Tracks water flow rate in liters per minute (LPM) and measures pH levels for water safety.
 * ⛽ **Gas Flow & Leakage Detection:** Calculates gas flow rates and utilizes an MQ gas sensor to detect hazardous gas leaks.
@@ -46,7 +46,7 @@ An IoT-based multi-utility pipeline monitoring and fault detection system powere
 
 ---
 
-## 🚀 Getting Started
+##  Getting Started
 
 ### Prerequisites
 
